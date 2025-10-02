@@ -1,8 +1,10 @@
 #!/bin/bash
 # split_and_push_final_with_splitonly.sh
-# Splits large files into 10MB chunks, and optionally commits/pushes them.
+# Splits large files into 10MB chunks, optionally commits/pushes them,
+# can rewrap untracked chunks, and recombine chunks back to the original.
+#
 # Usage:
-#   ./split_and_push.sh [--split-only|--rewrap] file1.tar.gz file2.tgz ...
+#   ./split_and_push.sh [--split-only|--rewrap|--recombine] file1.tar.gz file2.tgz ...
 
 set -euo pipefail
 
@@ -11,21 +13,29 @@ CHUNK_BYTES=$((10 * 1024 * 1024)) # 10 MB in bytes
 BRANCH="main"
 STATE_FILE=".pushed_chunks.log"
 MODE="push"   # default mode is push
-REWRAP=false  # new flag
+REWRAP=false
+RECOMBINE=false
 
-# Check for flags
-if [ "${1:-}" == "--split-only" ]; then
-  MODE="split"
-  shift
-elif [ "${1:-}" == "--rewrap" ]; then
-  REWRAP=true
-  shift
-fi
+# Parse first flag
+case "${1:-}" in
+  --split-only)
+    MODE="split"
+    shift
+    ;;
+  --rewrap)
+    REWRAP=true
+    shift
+    ;;
+  --recombine)
+    RECOMBINE=true
+    shift
+    ;;
+esac
 
 touch "$STATE_FILE"
 
 # Ensure log + original tars are ignored in Git
-if [ "$MODE" = "push" ]; then
+if [ "$MODE" = "push" ] && [ "$RECOMBINE" = false ]; then
   if ! grep -q ".pushed_chunks.log" .gitignore 2>/dev/null; then
     echo ".pushed_chunks.log" >> .gitignore
     echo "*.tar.gz" >> .gitignore
@@ -33,6 +43,26 @@ if [ "$MODE" = "push" ]; then
   fi
 fi
 
+# ============================================================
+# Recombine mode
+# ============================================================
+if [ "$RECOMBINE" = true ]; then
+  for basefile in "$@"; do
+    echo "🔗 Recombining parts for $basefile ..."
+    # Expect chunks like basefile.part.000, basefile.part.001, etc.
+    if ls "${basefile}.part."* >/dev/null 2>&1; then
+      cat "${basefile}.part."* > "$basefile"
+      echo "✅ Recombined into $basefile"
+    else
+      echo "❌ No chunks found for $basefile"
+    fi
+  done
+  exit 0
+fi
+
+# ============================================================
+# Normal split/push workflow
+# ============================================================
 for file in "$@"; do
   echo "📦 Processing $file ..."
 
